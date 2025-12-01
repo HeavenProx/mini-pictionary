@@ -54,3 +54,10 @@ model VerificationToken {
   token      String   @unique @db.VarChar(128)   
   expires    DateTime
 }
+
+model Room {
+  id        String   @id @default(uuid())
+  hostId    String?  // id user (si tu veux), sinon null
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
