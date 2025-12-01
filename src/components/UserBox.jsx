@@ -37,7 +37,7 @@ export default function UserBox() {
           onClick={() => signOut({ callbackUrl: "/" })}
           className="px-3 py-2 text-sm rounded-lg border
                      border-neutral-300/70 dark:border-neutral-700/70
-                     hover:bg-neutral-100 dark:hover:bg-neutral-800 transition"
+                     hover:bg-base-100 dark:hover:bg-base-800 transition"
         >
           Se déconnecter
         </button>
@@ -50,18 +50,12 @@ export default function UserBox() {
     <div className="justify-self-end flex items-center gap-2 min-w-0">
       <Link
         href="/login"
-        className="px-3 py-2 text-sm rounded-lg border
-                   border-neutral-300/70 dark:border-neutral-700/70
-                   hover:bg-neutral-100 dark:hover:bg-neutral-800 transition"
-      >
+        className="px-3 py-2 text-sm rounded-lg border border-base-300 hover:bg-base-200 transition">
         Se connecter
       </Link>
       <Link
         href="/register"
-        className="px-3 py-2 text-sm rounded-lg
-                   bg-indigo-600 text-white hover:bg-indigo-500
-                   dark:bg-indigo-500 dark:hover:bg-indigo-400 transition shadow-sm"
-      >
+        className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-content hover:bg-primary/90 transition shadow-sm">
         Inscription
       </Link>
     </div>
