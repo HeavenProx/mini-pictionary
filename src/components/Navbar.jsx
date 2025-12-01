@@ -1,6 +1,7 @@
 "use client"
 import Link from "next/link"
 import ThemeToggle from "./ThemeToggle"
+import UserBox from "@/components/UserBox"
 
 export default function Navbar() {
     return (
@@ -21,17 +22,8 @@ export default function Navbar() {
                     </Link>
 
                     {/* Actions */}
-                    <div className="justify-self-end flex items-center gap-2 min-w-0">
-                        <Link href="/login" className="px-3 py-2 text-sm rounded-lg border
-                                                        border-neutral-300/70 dark:border-neutral-700/70
-                                                        hover:bg-neutral-100 dark:hover:bg-neutral-800 transition">
-                            Se connecter
-                        </Link>
-                        <Link href="/register" className="px-3 py-2 text-sm rounded-lg
-                                                            bg-indigo-600 text-white hover:bg-indigo-500
-                                                            dark:bg-indigo-500 dark:hover:bg-indigo-400 transition shadow-sm">
-                            Inscription
-                        </Link>
+                    <div className="justify-self-end">
+                      <UserBox />
                     </div>
                 </div>
             </div>
