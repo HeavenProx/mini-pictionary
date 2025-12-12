@@ -1,19 +1,25 @@
-// src/app/api/rooms/[id]/route.js
 import { NextResponse } from "next/server"
-import { PrismaClient } from "@prisma/client"
-const prisma = new PrismaClient()
+import prisma from "@/lib/prisma"
 
-export async function GET(_req, { params }) {
+// évite tout cache côté Next/edge pour cette route
+export const dynamic = "force-dynamic"
+
+export async function GET(_req, context) {
   try {
-    const { id } = params
-    const room = await prisma.room.findUnique({ where: { id } })
-    if (room){
-        return NextResponse.json({ exists: true })
-    } else {
-        return NextResponse.json({ exists: false }, { status: 404 })
+    // ⚠️ sur Next 15, params peut être async → on l'attend
+    const { id } = await context.params
+    if (!id) {
+      return NextResponse.json({ exists: false, error: "MISSING_ID" }, { status: 400 })
     }
+
+    const room = await prisma.room.findUnique({ where: { id } })
+    if (!room) {
+      return NextResponse.json({ exists: false }, { status: 404 })
+    }
+
+    return NextResponse.json({ exists: true }, { status: 200 })
   } catch (e) {
-    console.error("check room error:", e)
-    return NextResponse.json({ error: "SERVER_ERROR" }, { status: 500 })
+    console.error("[api/rooms/[id]] GET error:", e)
+    return NextResponse.json({ exists: false, error: "SERVER_ERROR" }, { status: 500 })
   }
 }
