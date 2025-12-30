@@ -4,7 +4,9 @@ generator client {
 
 datasource db {
   provider = "mysql"
-  url      = env("DATABASE_URL")
+  // Note: for migrations we configured `prisma/prisma.config.cjs`.
+  // Keep the DATABASE_URL here so `prisma generate` and client work in dev.
+  url = env("DATABASE_URL")
 }
 
 model User {
@@ -56,9 +58,12 @@ model VerificationToken {
 }
 
 model Room {
-  id        String   @id @default(uuid())
-  hostId    String?  // id user (si tu veux), sinon null
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(uuid())
+  hostId         String?  // id user (si tu veux), sinon null
+  started        Boolean  @default(false)
+  drawerId       String?  // user id choisi comme dessinateur (nullable)
+  drawerSocketId String?  // socket id choisi (fallback if anonymous)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 

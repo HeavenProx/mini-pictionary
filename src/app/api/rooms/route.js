@@ -5,8 +5,9 @@ const prisma = new PrismaClient()
 
 export async function POST(req) {
   try {
-    // plus tard: lire le user de la session et mettre hostId
-    const room = await prisma.room.create({ data: {} })
+    const body = await req.json().catch(() => ({}))
+    const hostId = body?.hostId || null
+    const room = await prisma.room.create({ data: { hostId } })
     return NextResponse.json({ id: room.id })
   } catch (e) {
     console.error("create room error:", e)

@@ -38,17 +38,123 @@ export default function RoomPage() {
   ])
   const [chatInput, setChatInput] = useState("")
 
-  // ------- vérifier que la room existe -------
+  // ------- vérifier que la room existe et si je suis l'host -------
+  const [started, setStarted] = useState(false)
+  const [isHost, setIsHost] = useState(false)
+  const [startError, setStartError] = useState("")
+  const [actionError, setActionError] = useState("")
+
   useEffect(() => {
     let abort = false
     ;(async () => {
       const res = await fetch(`/api/rooms/${roomId}`)
+      const data = await res.json().catch(() => ({}))
       if (abort) return
       setExists(res.ok)
       if (!res.ok) setTimeout(() => router.replace("/rooms/join"), 1500)
+      else {
+        setIsHost(Boolean(data.hostId && data.hostId === me.id))
+        if (data?.started) {
+          setStarted(true)
+          // si la DB dit que je suis le drawer, assure mon rôle
+          if (data?.drawerId && data.drawerId === me.id) {
+            setRole("drawer")
+          }
+        }
+      }
     })()
     return () => { abort = true }
-  }, [roomId, router])
+  }, [roomId, router, me.id])
+
+  // écoute l'état de la room (started) côté socket
+  const [role, setRole] = useState(null) // 'drawer' | 'guesser'
+  const [drawerName, setDrawerName] = useState(null)
+
+  useEffect(() => {
+    if (!roomId) return
+    const socket = getSocket()
+    const onState = ({ started }) => {
+      console.log("[client] room:state received", { started })
+      setStarted(Boolean(started))
+    }
+    const onGameStarted = ({ started }) => {
+      console.log("[client] game:started received", { started })
+      setStarted(Boolean(started))
+    }
+    const onStartDenied = ({ reason }) => {
+      console.log("[client] game:start:denied received", { reason })
+      setStartError(reason || "START_DENIED")
+    }
+    const onStartOk = ({ roomId, drawerSid, drawerName, drawerUserId, drawerSocketId }) => {
+      console.log("[client] game:start:ok received", { roomId, drawerSid, drawerName, drawerUserId, drawerSocketId })
+      // server confirmed persistence — nothing to do here (roles will arrive via game:role), but clear errors
+      setStartError("")
+    }
+    const onRole = ({ role, drawerName, drawerUserId, drawerSocketId }) => {
+      console.log("[client] game:role received", { role, drawerName, drawerUserId, drawerSocketId })
+      const socket = getSocket()
+      const authoritative = Boolean(drawerUserId || drawerSocketId)
+
+      setRole((prev) => {
+        // If server provides authoritative identity, follow it strictly
+        if (authoritative) {
+          if ((drawerUserId && drawerUserId === me.id) || (drawerSocketId && socket.id && drawerSocketId === socket.id)) {
+            return "drawer"
+          }
+          return "guesser"
+        }
+
+        // No authoritative info: avoid overwriting an existing drawer role with an unauthenticated 'guesser' message
+        if (!role) return prev
+        if (role === "guesser" && prev === "drawer") return prev
+        return role
+      })
+
+      setActionError("")
+      if (drawerName) setDrawerName(drawerName)
+    }
+    const onRoles = ({ drawerSid, drawerName, drawerUserId, drawerSocketId }) => {
+      console.log("[client] game:roles received", { drawerSid, drawerName, drawerUserId, drawerSocketId })
+      setDrawerName(drawerName || null)
+      const socket = getSocket()
+      // si le drawerUserId correspond à moi, assure mon rôle
+      if (drawerUserId && drawerUserId === me.id) {
+        setRole("drawer")
+      } else if (drawerSocketId && socket.id && drawerSocketId === socket.id) {
+        // fallback : si le drawer était anonyme et son socket correspond au mien
+        setRole("drawer")
+      }
+    }
+
+    socket.on("room:state", onState)
+    socket.on("game:started", onGameStarted)
+    socket.on("game:start:denied", onStartDenied)
+    socket.on("game:start:ok", onStartOk)
+    socket.on("game:role", onRole)
+    socket.on("game:roles", onRoles)
+
+    const onChatDenied = ({ reason }) => {
+      console.log("[client] chat:denied", { reason })
+      setActionError(reason || "CHAT_DENIED")
+    }
+    const onDrawDenied = ({ reason }) => {
+      console.log("[client] draw:denied", { reason })
+      setActionError(reason || "DRAW_DENIED")
+    }
+
+    socket.on("chat:denied", onChatDenied)
+    socket.on("draw:denied", onDrawDenied)
+
+    return () => {
+      socket.off("room:state", onState)
+      socket.off("game:started", onGameStarted)
+      socket.off("game:start:denied", onStartDenied)
+      socket.off("game:role", onRole)
+      socket.off("game:roles", onRoles)
+      socket.off("chat:denied", onChatDenied)
+      socket.off("draw:denied", onDrawDenied)
+    }
+  }, [roomId])
 
   // ------- Canvas: resize DPR -------
   useEffect(() => {
@@ -137,6 +243,12 @@ export default function RoomPage() {
 
   // ------- Chat: send -------
   const sendChat = () => {
+    // only guessers can send chat
+    if (role === "drawer") {
+      setStartError("Seul un devinateur peut écrire dans le chat")
+      return
+    }
+
     const text = chatInput.trim()
     if (!text) return
 
@@ -151,6 +263,8 @@ export default function RoomPage() {
 
   // ------- Canvas: interactions (local + emit) -------
   const startDraw = (e) => {
+    // only drawer can start drawing
+    if (role !== "drawer") return
     e.preventDefault()
     const p = getPos(e)
     lastRef.current = p
@@ -158,6 +272,8 @@ export default function RoomPage() {
   }
   const draw = (e) => {
     if (!isDrawing) return
+    // only drawer can draw
+    if (role !== "drawer") return
     e.preventDefault()
     const canvas = canvasRef.current
     const ctx = canvas.getContext("2d")
@@ -174,11 +290,64 @@ export default function RoomPage() {
   }
   const endDraw = () => setIsDrawing(false)
 
+  const startGame = () => {
+    console.log("[client] game:start emit", { roomId })
+    getSocket().emit("game:start", { roomId })
+    setStarted(true)
+  }
 
   if (exists === false) {
     return (
       <div className="min-h-[60dvh] grid place-items-center">
         <p>Room introuvable… redirection…</p>
+      </div>
+    )
+  }
+
+  // page d'attente (avant démarrage de la partie)
+  if (exists && !started) {
+    return (
+      <div className="min-h-[70dvh] grid place-items-center px-4">
+        <div className="w-full max-w-lg rounded-2xl border border-neutral-300 dark:border-neutral-700 p-6">
+          <div className="flex items-center justify-between">
+            <h1 className="text-xl font-semibold">En attente — Room</h1>
+            <Link href="/" className="text-sm underline">← Retour</Link>
+          </div>
+
+          <p className="mt-3 text-sm opacity-80">Code de la room : <span className="font-mono text-green-600">{roomId}</span></p>
+
+          <div className="my-5">
+              <p className="text-medium">Lorsque la partie commence, un rôle vous est automatiquement attribué. Vous devenez un des deux : </p>
+              <ul className="mt-2 space-y-1">
+                <li className="text-sm"><span className="font-semibold text-blue-600">Dessinateur</span> : il doit faire deviner son mot secret en dessinant</li>
+                <li className="text-sm"><span className="font-semibold text-red-600">Devineur</span> : il doit deviner le mot secret du dessinateur en écrivant dans le chat</li>
+              </ul>
+          </div>
+
+          <div className="mt-4">
+            <h3 className="font-medium">Joueurs : {participants.length}</h3>
+            <ul className="mt-2 space-y-1">
+              {participants.map((p) => (
+                <li key={p.id} className="text-sm">{p.name}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="mt-6">
+            {isHost ? (
+              <div>
+                <button onClick={startGame} className="px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-500 transition">
+                  Lancer la partie
+                </button>
+                {startError && (
+                  <p className="text-sm text-red-500 mt-2">Erreur: {startError}</p>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm opacity-80">En attente du lanceur de la partie…</p>
+            )}
+          </div>
+        </div>
       </div>
     )
   }
@@ -193,8 +362,8 @@ export default function RoomPage() {
               <button
                 key={c}
                 aria-label={`Couleur ${c}`}
-                onClick={() => setColor(c)}
-                className={`h-10 w-10 rounded-full ring-4 transition border border-neutral-300 dark:border-neutral-700 ${color === c ? "ring-indigo-500" : "ring-transparent"}`}
+                onClick={() => role === "drawer" && setColor(c)}
+                className={`h-10 w-10 rounded-full ring-4 transition border border-neutral-300 dark:border-neutral-700 ${color === c ? "ring-indigo-500" : "ring-transparent"} ${started && role !== "drawer" ? "opacity-40 pointer-events-none" : ""}`}
                 style={{ backgroundColor: c }}
               />
             ))}
@@ -206,7 +375,15 @@ export default function RoomPage() {
           <div className="rounded-xl border border-neutral-300 dark:border-neutral-700 p-4">
             <div className="flex items-center justify-between">
               <h1 className="text-xl font-semibold">Room {String(roomId).slice(0, 8)}…</h1>
-              <Link href="/" className="text-sm underline">Quitter</Link>
+              <div className="flex items-center gap-3">
+                {started && role && (
+                  <span className={`text-sm font-medium ${role === "drawer" ? "text-blue-600" : "text-red-600"}`}>
+                    {role === "drawer" ? "Dessinateur" : "Devinateur"}
+                    {role === "drawer" && drawerName ? ` — ${drawerName}` : ""}
+                  </span>
+                )}
+                <Link href="/" className="text-sm underline">Quitter</Link>
+              </div>
             </div>
 
             <div
@@ -216,7 +393,7 @@ export default function RoomPage() {
             >
               <canvas
                 ref={canvasRef}
-                className="absolute inset-0 cursor-crosshair touch-none"
+                className={`absolute inset-0 cursor-crosshair touch-none ${started && role !== "drawer" ? "pointer-events-none opacity-60" : ""}`}
                 onMouseDown={startDraw}
                 onMouseMove={draw}
                 onMouseUp={endDraw}
@@ -233,8 +410,9 @@ export default function RoomPage() {
                 type="text"
                 placeholder="Ton mot secret…"
                 className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 outline-none focus:ring-2 focus:ring-violet-500/60"
+                disabled={role !== "drawer"}
               />
-              <button className="rounded-lg px-4 py-2 bg-violet-600 text-white hover:bg-violet-500 transition">
+              <button className="rounded-lg px-4 py-2 bg-violet-600 text-white hover:bg-violet-500 transition" disabled={role !== "drawer"}>
                 Valider
               </button>
             </div>
@@ -264,18 +442,24 @@ export default function RoomPage() {
               ))}
             </div>
             {/* Input */}
+            {actionError && (
+              <div className="p-3">
+                <p className="text-sm text-red-500">{actionError}</p>
+              </div>
+            )}
             <form
               onSubmit={(e) => { e.preventDefault(); sendChat(); }}
               className="border-t border-neutral-300 dark:border-neutral-700 p-3 flex gap-2"
             >
               <input
                 type="text"
-                placeholder="Ton message…"
+                placeholder={role === "drawer" ? "Tu es le dessinateur — tu ne peux pas écrire" : "Ton message…"}
                 className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700
                             bg-white dark:bg-neutral-900 px-3 py-2 outline-none
                             focus:ring-2 focus:ring-violet-500/60"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
+                disabled={role === "drawer"}
               />
               <button
                 type="submit"
@@ -287,7 +471,7 @@ export default function RoomPage() {
             </form>
           </div>
           <p className="text-xs opacity-70 mt-2">
-            Connexion temps réel via Socket.IO — room <span className="font-mono">#{roomId}</span>.
+            Code de la room : <span className="font-mono">{roomId}</span>
           </p>
         </aside>
       </div>

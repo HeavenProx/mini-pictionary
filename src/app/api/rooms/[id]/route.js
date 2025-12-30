@@ -17,7 +17,7 @@ export async function GET(_req, context) {
       return NextResponse.json({ exists: false }, { status: 404 })
     }
 
-    return NextResponse.json({ exists: true }, { status: 200 })
+    return NextResponse.json({ exists: true, hostId: room.hostId, started: room.started, drawerId: room.drawerId || null, drawerSocketId: room.drawerSocketId || null }, { status: 200 })
   } catch (e) {
     console.error("[api/rooms/[id]] GET error:", e)
     return NextResponse.json({ exists: false, error: "SERVER_ERROR" }, { status: 500 })

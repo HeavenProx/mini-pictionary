@@ -3,17 +3,23 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
+import { useSession } from "next-auth/react"
 
 export default function CreateRoomPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState("")
+  const { data: session } = useSession()
 
   async function handleCreate() {
     setErr("")
     setLoading(true)
     try {
-      const res = await fetch("/api/rooms", { method: "POST" })
+      const res = await fetch("/api/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hostId: session?.user?.id }),
+      })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || "Erreur")
       router.push(`/rooms/${data.id}`)
@@ -46,19 +52,6 @@ export default function CreateRoomPage() {
                 {loading ? "Création..." : "Générer la room"}
             </button>
             {err && <p className="text-sm text-red-500 mt-2">{err}</p>}
-
-            <button
-                type="button"
-                className="px-4 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition"
-                // TODO: plus tard → copier le code dans le presse-papiers
-            >
-                Copier le code
-            </button>
-        </div>
-
-        <div className="mt-6 rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 p-4">
-          <p className="text-sm opacity-80">Code de la room :</p>
-          <p className="mt-1 text-lg font-mono">— — — — — — — —</p>
         </div>
       </div>
     </div>
