@@ -68,33 +68,77 @@ export default function handler(req, res) {
               drawerName = participantsMap.get(drawerSid)?.name || null
             }
 
-            state = { started: true, drawerSid, drawerName, drawerUserId: roomRec.drawerId, drawerSocketId: roomRec.drawerSocketId }
+            state = { started: true, drawerSid, drawerName, drawerUserId: roomRec.drawerId, drawerSocketId: roomRec.drawerSocketId, currentWordId: roomRec.currentWordId }
             roomStates.set(roomId, state)
 
-            // envoyer roles / rôle individuel à tous les participants
+            // envoyer le rôle *seulement* au dessinateur (authoritatif), et broadcast l'identité du dessinateur à tous
             const sids = Array.from(participantsMap.keys())
-            for (const sid of sids) {
-              const role = sid === drawerSid ? "drawer" : "guesser"
-              io.to(sid).emit("game:role", { role, drawerName, drawerUserId: roomRec.drawerId, drawerSocketId: roomRec.drawerSocketId })
+            if (drawerSid) {
+              io.to(drawerSid).emit("game:role", { role: "drawer", drawerName, drawerUserId: roomRec.drawerId, drawerSocketId: roomRec.drawerSocketId })
             }
             io.to(roomId).emit("game:roles", { drawerSid, drawerName, drawerUserId: roomRec.drawerId, drawerSocketId: roomRec.drawerSocketId })
+
+            // si un mot était déjà choisi, récupérer le texte et l'envoyer au dessinateur
+            if (roomRec.currentWordId) {
+              try {
+                const prompt = await prisma.prompt.findUnique({ where: { id: roomRec.currentWordId } })
+                if (prompt && drawerSid) {
+                  io.to(drawerSid).emit('game:word', { word: prompt.text, wordId: prompt.id })
+                  console.log('[io] re-sent secret word to drawer on join', { roomId, drawerSid, wordId: prompt.id })
+                }
+              } catch (e) {
+                console.error('[io] failed to fetch prompt on join', { roomId, e })
+              }
+            }
           }
         } catch (e) {
           console.error("[io] failed to sync room state from DB on join", { roomId, e })
         }
       }
 
+      // If the room has already started and this joining user is the persisted drawer user,
+      // rebind the drawer to this socket and persist the drawerSocketId so reconnections are authoritative.
+      if (state?.started && user?.id && state.drawerUserId && state.drawerUserId === user.id) {
+        state.drawerSid = socket.id
+        state.drawerSocketId = socket.id
+        roomStates.set(roomId, state)
+        try {
+          await prisma.room.update({ where: { id: roomId }, data: { drawerSocketId: socket.id } })
+          console.log('[io] updated drawerSocketId on reconnect', { roomId, drawerUserId: state.drawerUserId, drawerSocketId: socket.id })
+        } catch (e) {
+          console.error('[io] failed to persist drawerSocketId on reconnect', { roomId, e })
+        }
+
+        // broadcast authoritative roles and re-send current word if any
+        io.to(roomId).emit('game:roles', { drawerSid: state.drawerSid, drawerName: state.drawerName, drawerUserId: state.drawerUserId, drawerSocketId: state.drawerSocketId })
+        if (state.currentWordId) {
+          try {
+            const prompt = await prisma.prompt.findUnique({ where: { id: state.currentWordId } })
+            if (prompt) {
+              io.to(state.drawerSid).emit('game:word', { word: prompt.text, wordId: prompt.id })
+              console.log('[io] re-sent secret word to drawer on reconnect', { roomId, drawerSid: state.drawerSid, wordId: prompt.id })
+            }
+          } catch (e) {
+            console.error('[io] failed to fetch prompt on reconnect', { roomId, e })
+          }
+        }
+      }
+
       socket.emit("room:state", { started: state?.started || false })
       console.log("[io] room:state ->", { to: socket.id, roomId, started: state?.started || false })
 
-      // si la partie est déjà commencée, indique le rôle au nouveau entrant
+      // si la partie est déjà commencée, renvoyer l'information authoritatives au nouveau entrant
       if (state?.started) {
         const drawerSid = state.drawerSid || null
-        const role = socket.id === drawerSid ? "drawer" : "guesser"
-        socket.emit("game:role", { role, drawerName: state.drawerName, drawerUserId: state.drawerUserId, drawerSocketId: state.drawerSocketId })
-        // en plus, envoyer qui est le drawerUserId si existant
-        if (state.drawerUserId) {
-          socket.emit("game:roles", { drawerSid, drawerName: state.drawerName, drawerUserId: state.drawerUserId })
+        // toujours fournir l'info globale sur qui est le dessinateur
+        socket.emit("game:roles", { drawerSid, drawerName: state.drawerName, drawerUserId: state.drawerUserId, drawerSocketId: state.drawerSocketId })
+
+        // si le socket qui rejoint est le dessinateur, lui renvoyer explicitement son rôle et le mot
+        if (socket.id === drawerSid) {
+          socket.emit("game:role", { role: "drawer", drawerName: state.drawerName, drawerUserId: state.drawerUserId, drawerSocketId: state.drawerSocketId })
+          if (state.currentWordText) {
+            socket.emit('game:word', { word: state.currentWordText, wordId: state.currentWordId })
+          }
         }
       }
 
@@ -157,27 +201,41 @@ export default function handler(req, res) {
         const drawerSocketId = drawerSid || null
 
         // Persister l'état en DB (drawerId si user connu, drawerSocketId en fallback)
+        let selectedPrompt = null
         try {
-          const updated = await prisma.room.update({ where: { id: r }, data: { started: true, drawerId: drawerUserId, drawerSocketId } })
-          console.log("[io] persisted room state:", { roomId: r, started: updated.started, drawerId: updated.drawerId, drawerSocketId: updated.drawerSocketId })
+          // pick a random prompt from DB
+          const count = await prisma.prompt.count()
+          if (count > 0) {
+            const skip = Math.floor(Math.random() * count)
+            const p = await prisma.prompt.findMany({ take: 1, skip })
+            selectedPrompt = p[0] || null
+          }
+
+          const updated = await prisma.room.update({ where: { id: r }, data: { started: true, drawerId: drawerUserId, drawerSocketId, currentWordId: selectedPrompt ? selectedPrompt.id : null } })
+          console.log("[io] persisted room state:", { roomId: r, started: updated.started, drawerId: updated.drawerId, drawerSocketId: updated.drawerSocketId, currentWordId: updated.currentWordId })
         } catch (e) {
           console.error("[io] failed to persist room state", { roomId: r, e })
         }
 
-        roomStates.set(r, { started: true, drawerSid, drawerName, drawerUserId, drawerSocketId })
+        roomStates.set(r, { started: true, drawerSid, drawerName, drawerUserId, drawerSocketId, currentWordId: selectedPrompt ? selectedPrompt.id : null, currentWordText: selectedPrompt ? selectedPrompt.text : null })
 
         // broadcast state + event
         io.to(r).emit("room:state", { started: true })
         io.to(r).emit("game:started", { started: true })
 
-        // envoie le rôle à chaque socket individuellement
-        for (const sid of sids) {
-          const role = sid === drawerSid ? "drawer" : "guesser"
-          io.to(sid).emit("game:role", { role, drawerName, drawerUserId, drawerSocketId })
+        // envoie le rôle *seulement* au dessinateur (authoritatif)
+        if (drawerSid) {
+          io.to(drawerSid).emit("game:role", { role: "drawer", drawerName, drawerUserId, drawerSocketId })
         }
 
         // broadcast info sur qui est le dessinateur pour l'UI
         io.to(r).emit("game:roles", { drawerSid, drawerName, drawerUserId, drawerSocketId })
+
+        // envoie le mot secret QUE AU DESSINATEUR
+        if (drawerSid && selectedPrompt) {
+          io.to(drawerSid).emit("game:word", { word: selectedPrompt.text, wordId: selectedPrompt.id })
+          console.log('[io] sent secret word to drawer', { roomId: r, drawerSid, wordId: selectedPrompt.id })
+        }
 
         // envoie une confirmation à l'initiateur
         socket.emit("game:start:ok", { roomId: r, drawerSid, drawerName, drawerUserId, drawerSocketId })

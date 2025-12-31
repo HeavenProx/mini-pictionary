@@ -60,6 +60,9 @@ export default function RoomPage() {
           if (data?.drawerId && data.drawerId === me.id) {
             setRole("drawer")
           }
+          // stocker l'identité persistante du dessinateur pour éviter les écrasements
+          if (data?.drawerId) setDrawerUserId(data.drawerId)
+          if (data?.drawerSocketId) setDrawerSocketId(data.drawerSocketId)
         }
       }
     })()
@@ -69,6 +72,10 @@ export default function RoomPage() {
   // écoute l'état de la room (started) côté socket
   const [role, setRole] = useState(null) // 'drawer' | 'guesser'
   const [drawerName, setDrawerName] = useState(null)
+  const [drawerUserId, setDrawerUserId] = useState(null)
+  const [drawerSocketId, setDrawerSocketId] = useState(null)
+  const [secretWord, setSecretWord] = useState(null)
+  const pendingRoleRef = useRef(null)
 
   useEffect(() => {
     if (!roomId) return
@@ -76,6 +83,18 @@ export default function RoomPage() {
     const onState = ({ started }) => {
       console.log("[client] room:state received", { started })
       setStarted(Boolean(started))
+      // cleanup local prompt/roles when game stops
+      if (!started) {
+        setRole(null)
+        setDrawerName(null)
+        setDrawerUserId(null)
+        setDrawerSocketId(null)
+        setSecretWord(null)
+        if (pendingRoleRef.current) {
+          clearTimeout(pendingRoleRef.current)
+          pendingRoleRef.current = null
+        }
+      }
     }
     const onGameStarted = ({ started }) => {
       console.log("[client] game:started received", { started })
@@ -90,39 +109,62 @@ export default function RoomPage() {
       // server confirmed persistence — nothing to do here (roles will arrive via game:role), but clear errors
       setStartError("")
     }
-    const onRole = ({ role, drawerName, drawerUserId, drawerSocketId }) => {
-      console.log("[client] game:role received", { role, drawerName, drawerUserId, drawerSocketId })
+    const onRole = ({ role: incomingRole, drawerName: incomingDrawerName, drawerUserId: payloadDrawerUserId, drawerSocketId: payloadDrawerSocketId }) => {
+      console.log("[client] game:role received", { incomingRole, incomingDrawerName, payloadDrawerUserId, payloadDrawerSocketId })
       const socket = getSocket()
-      const authoritative = Boolean(drawerUserId || drawerSocketId)
+      const payloadAuthoritative = Boolean(payloadDrawerUserId || payloadDrawerSocketId)
 
-      setRole((prev) => {
-        // If server provides authoritative identity, follow it strictly
-        if (authoritative) {
-          if ((drawerUserId && drawerUserId === me.id) || (drawerSocketId && socket.id && drawerSocketId === socket.id)) {
-            return "drawer"
-          }
-          return "guesser"
+      // If payload is authoritative, apply immediately and clear any pending non-authoritative change
+      if (payloadAuthoritative) {
+        if (pendingRoleRef.current) {
+          clearTimeout(pendingRoleRef.current)
+          pendingRoleRef.current = null
         }
-
-        // No authoritative info: avoid overwriting an existing drawer role with an unauthenticated 'guesser' message
-        if (!role) return prev
-        if (role === "guesser" && prev === "drawer") return prev
-        return role
-      })
+        if ((payloadDrawerUserId && payloadDrawerUserId === me.id) || (payloadDrawerSocketId && socket.id && payloadDrawerSocketId === socket.id)) {
+          setRole("drawer")
+        } else {
+          setRole("guesser")
+        }
+      } else {
+        // Non-authoritative -> schedule a short delay so authoritative info (from fetch/game:roles) can arrive
+        if (pendingRoleRef.current) clearTimeout(pendingRoleRef.current)
+        pendingRoleRef.current = setTimeout(() => {
+          // if local authoritative identity exists, respect it
+          if (drawerUserId && drawerUserId === me.id) {
+            setRole((p) => p || "drawer")
+          } else if (drawerSocketId && socket.id && drawerSocketId === socket.id) {
+            setRole((p) => p || "drawer")
+          } else {
+            setRole(incomingRole)
+          }
+          pendingRoleRef.current = null
+        }, 150)
+      }
 
       setActionError("")
-      if (drawerName) setDrawerName(drawerName)
+      if (incomingDrawerName) setDrawerName(incomingDrawerName)
     }
-    const onRoles = ({ drawerSid, drawerName, drawerUserId, drawerSocketId }) => {
-      console.log("[client] game:roles received", { drawerSid, drawerName, drawerUserId, drawerSocketId })
+    const onRoles = ({ drawerSid, drawerName, drawerUserId: newDrawerUserId, drawerSocketId: newDrawerSocketId }) => {
+      console.log("[client] game:roles received", { drawerSid, drawerName, newDrawerUserId, newDrawerSocketId })
       setDrawerName(drawerName || null)
+      // clear any pending non-authoritative update
+      if (pendingRoleRef.current) {
+        clearTimeout(pendingRoleRef.current)
+        pendingRoleRef.current = null
+      }
+      // stocker l'identité persistée du dessinateur
+      setDrawerUserId(newDrawerUserId || null)
+      setDrawerSocketId(newDrawerSocketId || null)
       const socket = getSocket()
       // si le drawerUserId correspond à moi, assure mon rôle
-      if (drawerUserId && drawerUserId === me.id) {
+      if (newDrawerUserId && newDrawerUserId === me.id) {
         setRole("drawer")
-      } else if (drawerSocketId && socket.id && drawerSocketId === socket.id) {
+      } else if (newDrawerSocketId && socket.id && newDrawerSocketId === socket.id) {
         // fallback : si le drawer était anonyme et son socket correspond au mien
         setRole("drawer")
+      } else {
+        // sinon, assurez-vous que les joueurs voient le rôle 'guesser' (sans écraser un dessinateur local)
+        setRole((prev) => (prev === "drawer" ? "drawer" : "guesser"))
       }
     }
 
@@ -141,11 +183,21 @@ export default function RoomPage() {
       console.log("[client] draw:denied", { reason })
       setActionError(reason || "DRAW_DENIED")
     }
+    const onWord = ({ word, wordId }) => {
+      console.log('[client] game:word received', { wordId })
+      setSecretWord(word)
+    }
 
     socket.on("chat:denied", onChatDenied)
     socket.on("draw:denied", onDrawDenied)
+    socket.on("game:word", onWord)
 
     return () => {
+      if (pendingRoleRef.current) {
+        clearTimeout(pendingRoleRef.current)
+        pendingRoleRef.current = null
+      }
+
       socket.off("room:state", onState)
       socket.off("game:started", onGameStarted)
       socket.off("game:start:denied", onStartDenied)
@@ -153,8 +205,14 @@ export default function RoomPage() {
       socket.off("game:roles", onRoles)
       socket.off("chat:denied", onChatDenied)
       socket.off("draw:denied", onDrawDenied)
+      socket.off("game:word", onWord)
     }
   }, [roomId])
+
+  // clear secret word when role changes or game stops
+  useEffect(() => {
+    if (role !== 'drawer') setSecretWord(null)
+  }, [role, started])
 
   // ------- Canvas: resize DPR -------
   useEffect(() => {
@@ -405,18 +463,13 @@ export default function RoomPage() {
             </div>
 
             {/* mot secret (juste UI pour l’instant) */}
-            <div className="mt-4 flex flex-col sm:flex-row gap-2">
-              <input
-                type="text"
-                placeholder="Ton mot secret…"
-                className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 outline-none focus:ring-2 focus:ring-violet-500/60"
-                disabled={role !== "drawer"}
-              />
-              <button className="rounded-lg px-4 py-2 bg-violet-600 text-white hover:bg-violet-500 transition" disabled={role !== "drawer"}>
-                Valider
-              </button>
+            {role === 'drawer' && (
+              <div className="mb-2">
+                <div className="text-sm font-medium text-blue-600">Mot secret :</div>
+                <div className="mt-1 inline-block rounded-md bg-neutral-900 text-white px-3 py-2">{secretWord || 'Chargement…'}</div>
+              </div>
+            )}
             </div>
-          </div>
         </section>
 
         {/* CHAT + compteur joueurs */}

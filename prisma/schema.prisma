@@ -63,7 +63,22 @@ model Room {
   started        Boolean  @default(false)
   drawerId       String?  // user id choisi comme dessinateur (nullable)
   drawerSocketId String?  // socket id choisi (fallback if anonymous)
+  // current word for the active round (nullable)
+  currentWordId  String?  
+  currentWord    Prompt?  @relation(fields: [currentWordId], references: [id], onDelete: SetNull)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
+
+model Prompt {
+  id        String   @id @default(uuid())
+  text      String   @db.VarChar(200)
+  difficulty String? 
+  category  String?
+  createdAt DateTime @default(now())
+
+  // back-relation for rooms that use this prompt
+  rooms     Room[]
+}
+
 

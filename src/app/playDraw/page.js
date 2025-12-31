@@ -153,22 +153,9 @@ export default function PlayDraw() {
               </div>
 
               {/* Mot secret */}
-              <div className="mt-4 flex flex-col sm:flex-row gap-2">
-                <input
-                  type="text"
-                  placeholder="Ton mot secret…"
-                  className="input input-bordered w-full"
-                  value={word}
-                  onChange={(e) => setWord(e.target.value)}
-                  disabled={wordLocked}
-                />
-                {wordLocked ? (
-                  <span className="badge badge-success self-center">Validé</span>
-                ) : (
-                  <button onClick={validateWord} className="btn btn-primary">
-                    Valider
-                  </button>
-                )}
+              <div className="mt-4">
+                <div className="text-sm font-medium text-blue-600">Mot secret :</div>
+                <div className="mt-1 inline-block rounded-md bg-base-900 text-white px-3 py-2">(géré par le serveur)</div>
               </div>
             </div>
           </div>
