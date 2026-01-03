@@ -1,17 +1,24 @@
 "use client"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { signIn } from "next-auth/react"
-import { useSearchParams, useRouter } from "next/navigation"
+import { useRouter } from "next/navigation"
 
 export default function Login() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
-  const search = useSearchParams()
+  const [verifiedFlag, setVerifiedFlag] = useState(null)
   const router = useRouter()
 
-  const verifiedFlag = search.get("verified") // ?verified=1 après clic d’email
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      setVerifiedFlag(params.get("verified"))
+    } catch (e) {
+      setVerifiedFlag(null)
+    }
+  }, []) // read search params on client only (avoids SSR hook issue)
 
   async function onSubmit(e) {
     e.preventDefault()               
