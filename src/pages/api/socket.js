@@ -21,6 +21,142 @@ export default function handler(req, res) {
   const rooms = new Map() // Map<roomId, Map<socketId, {id,name}>>
   const roomStates = new Map() // Map<roomId, { started: boolean }>
 
+  // helper: démarre le compte à rebours de fin de manche pour une room
+  function startRoundEndCountdown(roomId) {
+    const state = roomStates.get(roomId)
+    if (!state) return
+    if (state.roundTimer && state.roundTimer.interval) return // déjà démarré
+
+    state.roundTimer = { remaining: 30, interval: null }
+    io.to(roomId).emit('game:timer', { remaining: state.roundTimer.remaining })
+    console.log('[io] started round end countdown', { roomId, remaining: state.roundTimer.remaining })
+
+    state.roundTimer.interval = setInterval(() => {
+      state.roundTimer.remaining -= 1
+      io.to(roomId).emit('game:timer', { remaining: state.roundTimer.remaining })
+
+      // si le timer arrive à zéro, on termine la manche
+      if (state.roundTimer.remaining <= 0) {
+        console.log('[io] round timer expired, ending round', { roomId })
+        endRound(roomId)
+      }
+
+      // si tous les devinateurs ont déjà trouvé, on termine aussi
+      const participantsMap = rooms.get(roomId) || new Map()
+      const guesserCount = Math.max(0, participantsMap.size - (state.drawerSid ? 1 : 0))
+      const foundCount = (state.currentFound || []).length
+      if (foundCount >= guesserCount && guesserCount > 0) {
+        endRound(roomId)
+      }
+    }, 1000)
+
+    roomStates.set(roomId, state)
+  }
+
+  // démarre une nouvelle manche (choisit dessinateur + mot + persiste)
+  async function startNewRound(roomId) {
+    try {
+      const participantsMap = rooms.get(roomId) || new Map()
+      const sids = Array.from(participantsMap.keys())
+      if (!sids.length) return
+
+      // choisit un nouveau dessinateur aléatoire
+      const drawerSid = sids[Math.floor(Math.random() * sids.length)]
+      const drawerName = participantsMap.get(drawerSid)?.name || null
+
+      // si le participant choisi possède un userId, on le persiste comme drawerId
+      let drawerUserId = null
+      const candidate = drawerSid ? participantsMap.get(drawerSid)?.id : null
+      if (candidate) {
+        const user = await prisma.user.findUnique({ where: { id: candidate } }).catch(() => null)
+        if (user) drawerUserId = user.id
+      }
+      const drawerSocketId = drawerSid || null
+
+      // pick prompt
+      let selectedPrompt = null
+      const count = await prisma.prompt.count()
+      if (count > 0) {
+        const skip = Math.floor(Math.random() * count)
+        const p = await prisma.prompt.findMany({ take: 1, skip })
+        selectedPrompt = p[0] || null
+      }
+
+      // Persister l'état en DB
+      try {
+        await prisma.room.update({ where: { id: roomId }, data: { started: true, drawerId: drawerUserId, drawerSocketId, currentWordId: selectedPrompt ? selectedPrompt.id : null } })
+      } catch (e) {
+        console.error('[io] failed to persist new round state', { roomId, e })
+      }
+
+      // Met à jour l'état en mémoire
+      roomStates.set(roomId, { started: true, drawerSid, drawerName, drawerUserId, drawerSocketId, currentWordId: selectedPrompt ? selectedPrompt.id : null, currentWordText: selectedPrompt ? selectedPrompt.text : null, currentFound: [], roundTimer: null, replayers: new Set() })
+
+      // broadcast: reset client UI (vider chat, effacer canvas, fermer modals)
+      io.to(roomId).emit('game:reset')
+
+      // broadcast state + event
+      io.to(roomId).emit('room:state', { started: true })
+      io.to(roomId).emit('game:started', { started: true })
+
+      // envoie le rôle *seulement* au dessinateur (authoritatif)
+      if (drawerSid) {
+        io.to(drawerSid).emit('game:role', { role: 'drawer', drawerName, drawerUserId, drawerSocketId })
+      }
+
+      // broadcast info sur qui est le dessinateur pour l'UI
+      io.to(roomId).emit('game:roles', { drawerSid, drawerName, drawerUserId, drawerSocketId })
+
+      // envoie le mot secret QUE AU DESSINATEUR
+      if (drawerSid && selectedPrompt) {
+        io.to(drawerSid).emit('game:word', { word: selectedPrompt.text, wordId: selectedPrompt.id })
+        console.log('[io] sent secret word to drawer (auto-start)', { roomId, drawerSid, wordId: selectedPrompt.id })
+      }
+
+    } catch (e) {
+      console.error('[io] startNewRound error', { roomId, e })
+    }
+  }
+
+  async function endRound(roomId) {
+    const state = roomStates.get(roomId)
+    if (!state) return
+
+    // stop timer si présent
+    if (state.roundTimer && state.roundTimer.interval) {
+      clearInterval(state.roundTimer.interval)
+    }
+
+    const winners = (state.currentFound || []).map((f) => ({ username: f.username, userId: f.userId }))
+
+    // broadcast end of the round
+    io.to(roomId).emit('game:timer', { remaining: 0 })
+    io.to(roomId).emit('game:ended', { winners })
+
+    // marque la room comme fermée (started = false) et nettoie le mot / dessinateur
+    try {
+      await prisma.room.update({ where: { id: roomId }, data: { started: false, drawerId: null, drawerSocketId: null, currentWordId: null } })
+    } catch (e) {
+      console.error('[io] failed to persist room closed state', { roomId, e })
+    }
+
+    // broadcast state closed
+    io.to(roomId).emit('room:state', { started: false })
+
+    // cleanup round-specific state
+    state.currentFound = []
+    state.roundTimer = null
+    state.replayers = state.replayers || new Set()
+    state.started = false
+    state.drawerSid = null
+    state.drawerName = null
+    state.drawerUserId = null
+    state.drawerSocketId = null
+    state.currentWordId = null
+    state.currentWordText = null
+    roomStates.set(roomId, state)
+  }
+
   io.on("connection", (socket) => {
     console.log("[io] connection", socket.id)
 
@@ -135,7 +271,7 @@ export default function handler(req, res) {
 
         // si le socket qui rejoint est le dessinateur, lui renvoyer explicitement son rôle et le mot
         if (socket.id === drawerSid) {
-          socket.emit("game:role", { role: "drawer", drawerName: state.drawerName, drawerUserId: state.drawerUserId, drawerSocketId: state.drawerSocketId })
+          socket.emit("game:role", { role: "drawer", drawerName: state.drawerName, drawerUserId: state.drawerUserId, drawerSocketId: state.drawerSocketId, word: state.currentWordText || null, wordId: state.currentWordId || null })
           if (state.currentWordText) {
             socket.emit('game:word', { word: state.currentWordText, wordId: state.currentWordId })
           }
@@ -219,19 +355,21 @@ export default function handler(req, res) {
 
         roomStates.set(r, { started: true, drawerSid, drawerName, drawerUserId, drawerSocketId, currentWordId: selectedPrompt ? selectedPrompt.id : null, currentWordText: selectedPrompt ? selectedPrompt.text : null })
 
+        // broadcast: reset client UI (vider chat, effacer canvas, fermer modals)
+        io.to(r).emit('game:reset')
+
         // broadcast state + event
         io.to(r).emit("room:state", { started: true })
         io.to(r).emit("game:started", { started: true })
 
         // envoie le rôle *seulement* au dessinateur (authoritatif)
         if (drawerSid) {
-          io.to(drawerSid).emit("game:role", { role: "drawer", drawerName, drawerUserId, drawerSocketId })
-        }
+          io.to(drawerSid).emit("game:role", { role: "drawer", drawerName, drawerUserId, drawerSocketId, word: selectedPrompt ? selectedPrompt.text : null, wordId: selectedPrompt ? selectedPrompt.id : null })          // send the word as well in a dedicated event; keep both for compatibility        }
 
         // broadcast info sur qui est le dessinateur pour l'UI
         io.to(r).emit("game:roles", { drawerSid, drawerName, drawerUserId, drawerSocketId })
 
-        // envoie le mot secret QUE AU DESSINATEUR
+        // envoie le mot secret QUE AU DESSINATEUR (au cas où le client attend séparément)
         if (drawerSid && selectedPrompt) {
           io.to(drawerSid).emit("game:word", { word: selectedPrompt.text, wordId: selectedPrompt.id })
           console.log('[io] sent secret word to drawer', { roomId: r, drawerSid, wordId: selectedPrompt.id })
@@ -244,14 +382,14 @@ export default function handler(req, res) {
         const recipients = roomSet ? roomSet.size : 0
         console.log("[io] game:start", { roomId: r, by: socket.id, recipients, drawerSid, drawerName, drawerUserId })
         console.log("[io] game:started emitted", { roomId: r, recipients, drawerSid, drawerName, drawerUserId })
-      } catch (err) {
+      }} catch (err) {
         console.error("[io] game:start error:", err)
         socket.emit("game:start:denied", { reason: "SERVER_ERROR" })
       }
-    })
+    });
 
     // ------- CHAT (diffusion à la room) -------
-    socket.on("chat:message", ({ roomId, text, user }) => {
+    socket.on("chat:message", async ({ roomId, text, user }) => {
       const r = roomId || socket.data.roomId
       if (!r || !text) return
       // garde-fou: s’assurer que le socket est bien dans la room
@@ -266,6 +404,39 @@ export default function handler(req, res) {
       if (state?.started && state.drawerSid === socket.id) {
         socket.emit("chat:denied", { reason: "NOT_ALLOWED_WHILE_DRAWING" })
         console.warn("[io] chat refused: drawer tried to chat", { roomId: r, sid: socket.id })
+        return
+      }
+
+      // Vérifie si la réponse est correcte (mot secret)
+      let foundWord = false
+      let currentWord = null
+      if (state?.started && state.currentWordId) {
+        try {
+          const prompt = await prisma.prompt.findUnique({ where: { id: state.currentWordId } })
+          if (prompt && prompt.text && text.trim().toLowerCase() === prompt.text.trim().toLowerCase()) {
+            foundWord = true
+            currentWord = prompt.text
+          }
+        } catch (e) {
+          console.error('[io] erreur vérif mot secret', e)
+        }
+      }
+
+      if (foundWord) {
+        // enregistrer qui a trouvé (empêche les doublons)
+        state.currentFound = state.currentFound || []
+        const finderId = user?.id || socket.id
+        if (!state.currentFound.find((f) => f.userId === finderId || f.socketId === socket.id)) {
+          state.currentFound.push({ username: user?.name || 'Anonyme', userId: user?.id || null, socketId: socket.id })
+          roomStates.set(r, state)
+        }
+
+        // Message spécial à toute la room (vert côté client)
+        io.to(r).emit('game:found', { username: user?.name || 'Anonyme', userId: user?.id || null, word: currentWord })
+
+        // démarre le compte à rebours si nécessaire
+        startRoundEndCountdown(r)
+
         return
       }
 
@@ -304,8 +475,41 @@ export default function handler(req, res) {
         rooms.get(r).delete(socket.id)
         const list = Array.from(rooms.get(r).values())
         io.to(r).emit("room:participants", list)
+
+        // if room is empty, cleanup timers/state
+        if (rooms.get(r).size === 0) {
+          const state = roomStates.get(r)
+          if (state?.roundTimer?.interval) clearInterval(state.roundTimer.interval)
+          rooms.delete(r)
+          roomStates.delete(r)
+        }
       }
       console.log("[io] disconnect", socket.id)
+    })
+
+    // permet à un joueur de retourner individuellement en page d'attente
+    socket.on('player:replay', async ({ roomId }) => {
+      const r = roomId || socket.data.roomId
+      const state = roomStates.get(r) || {}
+      state.replayers = state.replayers || new Set()
+      state.replayers.add(socket.id)
+      roomStates.set(r, state)
+
+      // envoie un état local au socket pour afficher la page d'attente
+      socket.emit('room:state', { started: false, replay: true })
+
+      // si TOUT le monde a cliqué Rejouer, on relance automatiquement une nouvelle manche
+      const participantsMap = rooms.get(r) || new Map()
+      const total = participantsMap.size
+      const replayersCount = state.replayers.size
+
+      if (total > 0 && replayersCount >= total) {
+        // clear the replayers set for next round
+        state.replayers = new Set()
+        roomStates.set(r, state)
+        // démarrer une nouvelle manche
+        startNewRound(r)
+      }
     })
   })
 

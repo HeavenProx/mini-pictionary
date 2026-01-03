@@ -76,6 +76,35 @@ export default function RoomPage() {
   const [drawerSocketId, setDrawerSocketId] = useState(null)
   const [secretWord, setSecretWord] = useState(null)
   const pendingRoleRef = useRef(null)
+  const [roundEnding, setRoundEnding] = useState(false)
+  const [remainingSeconds, setRemainingSeconds] = useState(null)
+  const [winners, setWinners] = useState([])
+  const [showEnd, setShowEnd] = useState(false)
+
+  // Détection : si moins d'un joueur ou si le dessinateur a disparu
+  const onlyOnePlayer = started && participants.length <= 1;
+  const drawerAssigned = !!drawerUserId || !!drawerSocketId;
+  // On attend que le drawer soit apparu au moins une fois dans la liste avant de considérer son absence comme un abandon
+  const [drawerWasPresent, setDrawerWasPresent] = useState(false);
+  // Reset drawerWasPresent à chaque nouvelle partie
+  useEffect(() => { setDrawerWasPresent(false); }, [started, drawerUserId, drawerSocketId]);
+  useEffect(() => {
+    if (!started || !drawerAssigned) return;
+    // Si le drawer (userId ou socketId) est présent dans la liste, on le note
+    const present = participants.some((p) =>
+      (drawerUserId && p.id === drawerUserId) ||
+      (drawerSocketId && p.id === drawerSocketId)
+    );
+    if (present) setDrawerWasPresent(true);
+  }, [started, drawerAssigned, drawerUserId, drawerSocketId, participants]);
+
+  // Considère le drawer comme manquant seulement si ni userId ni socketId n'est présent
+  const drawerMissing = started && drawerAssigned && drawerWasPresent &&
+    !participants.some((p) =>
+      (drawerUserId && p.id === drawerUserId) ||
+      (drawerSocketId && p.id === drawerSocketId)
+    );
+  const showAbort = (onlyOnePlayer || drawerMissing);
 
   useEffect(() => {
     if (!roomId) return
@@ -99,6 +128,11 @@ export default function RoomPage() {
     const onGameStarted = ({ started }) => {
       console.log("[client] game:started received", { started })
       setStarted(Boolean(started))
+      // assure que le canvas a la bonne taille au démarrage de la partie
+      requestAnimationFrame(() => ensureCanvasSize())
+      setTimeout(() => ensureCanvasSize(), 50)
+      // clear any previous secret word while roles/word are being assigned
+      setSecretWord(null)
     }
     const onStartDenied = ({ reason }) => {
       console.log("[client] game:start:denied received", { reason })
@@ -109,8 +143,8 @@ export default function RoomPage() {
       // server confirmed persistence — nothing to do here (roles will arrive via game:role), but clear errors
       setStartError("")
     }
-    const onRole = ({ role: incomingRole, drawerName: incomingDrawerName, drawerUserId: payloadDrawerUserId, drawerSocketId: payloadDrawerSocketId }) => {
-      console.log("[client] game:role received", { incomingRole, incomingDrawerName, payloadDrawerUserId, payloadDrawerSocketId })
+    const onRole = ({ role: incomingRole, drawerName: incomingDrawerName, drawerUserId: payloadDrawerUserId, drawerSocketId: payloadDrawerSocketId, word, wordId }) => {
+      console.log("[client] game:role received", { incomingRole, incomingDrawerName, payloadDrawerUserId, payloadDrawerSocketId, word, wordId })
       const socket = getSocket()
       const payloadAuthoritative = Boolean(payloadDrawerUserId || payloadDrawerSocketId)
 
@@ -122,6 +156,10 @@ export default function RoomPage() {
         }
         if ((payloadDrawerUserId && payloadDrawerUserId === me.id) || (payloadDrawerSocketId && socket.id && payloadDrawerSocketId === socket.id)) {
           setRole("drawer")
+          // si le serveur a envoyé le mot dans le même payload, applique-le immédiatement
+          if (word) setSecretWord(word)
+          // assure que le canvas est bien dimensionné
+          requestAnimationFrame(() => ensureCanvasSize())
         } else {
           setRole("guesser")
         }
@@ -192,6 +230,76 @@ export default function RoomPage() {
     socket.on("draw:denied", onDrawDenied)
     socket.on("game:word", onWord)
 
+    // Message spécial : un devineur a trouvé le mot
+    const onFound = ({ username, userId, word }) => {
+      setMessages((m) => [
+        ...m,
+        {
+          id: Date.now() + Math.random(),
+          author: username,
+          text: `a trouvé le mot !`,
+          found: true,
+          word,
+        },
+      ])
+    }
+    socket.on("game:found", onFound)
+
+    // Timer de fin de manche
+    const onTimer = ({ remaining }) => {
+      console.log('[client] game:timer', { remaining })
+      setRemainingSeconds(typeof remaining === 'number' ? remaining : null)
+      setRoundEnding(typeof remaining === 'number' && remaining > 0)
+      if (typeof remaining === 'number' && remaining <= 0) {
+        setRoundEnding(false)
+      }
+    }
+    socket.on('game:timer', onTimer)
+
+    // Fin de manche (winners)
+    const onEnded = ({ winners }) => {
+      console.log('[client] game:ended', { winners })
+      setWinners(winners || [])
+      setShowEnd(true)
+      setRoundEnding(false)
+      setRemainingSeconds(0)
+    }
+    socket.on('game:ended', onEnded)
+
+    // Réinitialisation de l'UI quand une nouvelle manche démarre
+    const onReset = () => {
+      // vider le chat pour tout le monde
+      setMessages([{ id: Date.now(), author: 'Système', text: 'Nouvelle manche — préparez-vous !' }])
+      // fermer la modal et reset des variables liées à la fin
+      setShowEnd(false)
+      setWinners([])
+      setRoundEnding(false)
+      setRemainingSeconds(null)
+      // effacer le mot secret côté client pour éviter d'afficher l'ancien mot
+      setSecretWord(null)
+      // effacer le dessin et recalculer la taille du canvas (DPR) pour éviter la zone de dessin restreinte
+      try {
+        const canvas = canvasRef.current
+        const wrap = containerRef.current
+        if (canvas && wrap) {
+          const dpr = Math.max(1, window.devicePixelRatio || 1)
+          const cssW = wrap.clientWidth
+          const cssH = wrap.clientHeight
+          canvas.width = Math.floor(cssW * dpr)
+          canvas.height = Math.floor(cssH * dpr)
+          canvas.style.width = cssW + 'px'
+          canvas.style.height = cssH + 'px'
+          const ctx = canvas.getContext('2d')
+          // set transform for high-DPI and clear
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+          ctx.clearRect(0, 0, canvas.width, canvas.height)
+        }
+      } catch (e) {
+        console.error('[client] failed to clear/resize canvas on reset', e)
+      }
+    }
+    socket.on('game:reset', onReset)
+
     return () => {
       if (pendingRoleRef.current) {
         clearTimeout(pendingRoleRef.current)
@@ -206,6 +314,10 @@ export default function RoomPage() {
       socket.off("chat:denied", onChatDenied)
       socket.off("draw:denied", onDrawDenied)
       socket.off("game:word", onWord)
+      socket.off("game:found", onFound)
+      socket.off('game:timer', onTimer)
+      socket.off('game:ended', onEnded)
+      socket.off('game:reset', onReset)
     }
   }, [roomId])
 
@@ -214,26 +326,30 @@ export default function RoomPage() {
     if (role !== 'drawer') setSecretWord(null)
   }, [role, started])
 
-  // ------- Canvas: resize DPR -------
-  useEffect(() => {
-    const resize = () => {
-      const canvas = canvasRef.current
-      const wrap = containerRef.current
-      if (!canvas || !wrap) return
-      const dpr = Math.max(1, window.devicePixelRatio || 1)
-      const cssW = wrap.clientWidth
-      const cssH = wrap.clientHeight
-      canvas.width = Math.floor(cssW * dpr)
-      canvas.height = Math.floor(cssH * dpr)
-      canvas.style.width = cssW + "px"
-      canvas.style.height = cssH + "px"
-      const ctx = canvas.getContext("2d")
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    }
-    resize()
-    window.addEventListener("resize", resize)
-    return () => window.removeEventListener("resize", resize)
+  // ------- Canvas sizing helper (DPR-aware) -------
+  const ensureCanvasSize = useCallback(() => {
+    const canvas = canvasRef.current
+    const wrap = containerRef.current
+    if (!canvas || !wrap) return
+    const dpr = Math.max(1, window.devicePixelRatio || 1)
+    const cssW = wrap.clientWidth
+    const cssH = wrap.clientHeight
+    canvas.width = Math.floor(cssW * dpr)
+    canvas.height = Math.floor(cssH * dpr)
+    canvas.style.width = cssW + "px"
+    canvas.style.height = cssH + "px"
+    const ctx = canvas.getContext("2d")
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   }, [])
+
+  useEffect(() => {
+    ensureCanvasSize()
+    // run a second resize on next frame / short timeout to handle layout changes
+    requestAnimationFrame(() => ensureCanvasSize())
+    setTimeout(() => ensureCanvasSize(), 100)
+    window.addEventListener("resize", ensureCanvasSize)
+    return () => window.removeEventListener("resize", ensureCanvasSize)
+  }, [ensureCanvasSize])
 
   // helpers
   const getPos = (e) => {
@@ -354,6 +470,16 @@ export default function RoomPage() {
     setStarted(true)
   }
 
+  const handleReplay = () => {
+    console.log('[client] player:replay emit', { roomId })
+    getSocket().emit('player:replay', { roomId })
+    // show waiting UI locally (server will also emit a 'room:state' targeted to this socket)
+    setStarted(false)
+    setShowEnd(false)
+    setWinners([])
+    setRemainingSeconds(null)
+  }
+
   if (exists === false) {
     return (
       <div className="min-h-[60dvh] grid place-items-center">
@@ -444,6 +570,15 @@ export default function RoomPage() {
               </div>
             </div>
 
+            {/* Banner: timer when a player found the word */}
+            {roundEnding && remainingSeconds != null && (
+              <div className="mt-3 p-2 rounded-md bg-yellow-100 text-sm text-neutral-900 flex items-center justify-between">
+                <div>
+                  <strong>Un joueur a trouvé le mot</strong> — il reste <strong>{remainingSeconds}s</strong> aux autres pour le trouver
+                </div>
+              </div>
+            )}
+
             <div
               ref={containerRef}
               className="mt-4 relative w-full h-[420px] md:h-[540px] rounded-lg
@@ -451,7 +586,7 @@ export default function RoomPage() {
             >
               <canvas
                 ref={canvasRef}
-                className={`absolute inset-0 cursor-crosshair touch-none ${started && role !== "drawer" ? "pointer-events-none opacity-60" : ""}`}
+                className={`absolute inset-0 cursor-crosshair touch-none ${started && role !== "drawer" ? "pointer-events-none opacity-60" : ""} ${showAbort ? "opacity-30 pointer-events-none" : ""}`}
                 onMouseDown={startDraw}
                 onMouseMove={draw}
                 onMouseUp={endDraw}
@@ -469,6 +604,34 @@ export default function RoomPage() {
                 <div className="mt-1 inline-block rounded-md bg-neutral-900 text-white px-3 py-2">{secretWord || 'Chargement…'}</div>
               </div>
             )}
+
+            {/* Modal fin de manche */}
+            {!showAbort && showEnd && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center">
+                <div className="bg-white dark:bg-neutral-900 border rounded-lg p-6 shadow-lg max-w-md w-full">
+                  <h3 className="text-lg font-semibold">Partie terminée</h3>
+                  <p className="mt-2">Gagnant{winners.length > 1 ? 's' : ''} : <strong>{winners.map(w => w.username).join(', ') || '—'}</strong></p>
+                  <div className="mt-4 flex gap-2 justify-end">
+                    <button onClick={handleReplay} className="px-4 py-2 rounded bg-violet-600 text-white">Rejouer</button>
+                    <button onClick={() => router.push('/')} className="px-4 py-2 rounded border">Accueil</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Modal: partie interrompue (manque de joueurs ou dessinateur absent) */}
+            {showAbort && (
+              <div className="fixed inset-0 z-60 flex items-center justify-center">
+                <div className="bg-white dark:bg-neutral-900 border rounded-lg p-6 shadow-lg max-w-md w-full">
+                  <h3 className="text-lg font-semibold">Partie interrompue</h3>
+                  <p className="mt-2">{onlyOnePlayer ? "Il ne reste qu'un joueur dans la room." : "Le dessinateur a quitté la partie."}</p>
+                  <div className="mt-4 flex gap-2 justify-end">
+                    <button onClick={() => router.push('/')} className="px-4 py-2 rounded border">Accueil</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             </div>
         </section>
 
@@ -488,10 +651,17 @@ export default function RoomPage() {
             <div ref={chatViewportRef}
                   className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2">
               {messages.map((m) => (
-                <div key={m.id} className="text-sm">
-                  <span className="font-semibold">{m.author}:</span>{" "}
-                  <span>{m.text}</span>
-                </div>
+                m.found ? (
+                  <div key={m.id} className="text-sm text-green-600 font-semibold">
+                    <span>{m.author} </span>
+                    <span>{m.text}</span>
+                  </div>
+                ) : (
+                  <div key={m.id} className="text-sm">
+                    <span className="font-semibold">{m.author}:</span>{" "}
+                    <span>{m.text}</span>
+                  </div>
+                )
               ))}
             </div>
             {/* Input */}
