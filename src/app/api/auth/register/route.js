@@ -83,7 +83,8 @@ export async function POST(req) {
     const { subject, text, html } = renderVerifyEmail({ pseudo, verifyUrl })
 
     try {
-      await sendMail({ to: email, subject, text, html })
+      const sendResult = await sendMail({ to: email, subject, text, html })
+      console.log('[register] send result:', sendResult)
     } catch (err) {
       console.error("[register] send-mail first-send error:", err)
       // En dev, ne bloque pas la création du compte si l'envoi d'email échoue — renvoie ok et le lien de vérif en dev

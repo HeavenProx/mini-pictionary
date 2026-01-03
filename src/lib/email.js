@@ -15,9 +15,20 @@ export async function sendMail({ to, subject, text, html }) {
       return { id: "dev-log" }
     }
     const resend = new Resend(process.env.RESEND_API_KEY)
-    const res = await resend.emails.send({ from, to, subject, html, text })
-    console.log("[Resend] sent, id:", res?.id)
-    return { id: res?.id || "resend" }
+    try {
+      const res = await resend.emails.send({ from, to, subject, html, text })
+      // Log full response to help debug missing messages in dashboard
+      try {
+        console.log("[Resend] response:", JSON.stringify(res))
+      } catch (e) {
+        console.log("[Resend] response (couldn't stringify):", res)
+      }
+      if (!res?.id) console.warn('[Resend] send returned no id')
+      return { id: res?.id || "resend" }
+    } catch (err) {
+      console.error('[Resend] send error:', err)
+      throw err
+    }
   }
 
   // SendGrid provider (legacy)
