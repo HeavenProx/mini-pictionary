@@ -43,7 +43,7 @@ export default function Home() {
                   <h2 className="text-lg font-semibold">Créer une partie</h2>
                 </div>
                 <p className="mt-2 text-sm opacity-80">
-                  Génère un code et deviens l'hôte de la room.
+                  Génère un code et deviens l&apos;hôte de la room.
                 </p>
               </Link>
 
@@ -61,7 +61,7 @@ export default function Home() {
                   <h2 className="text-lg font-semibold">Rejoindre une partie</h2>
                 </div>
                 <p className="mt-2 text-sm opacity-80">
-                  Entre le code partagé par l'hôte et rejoins la room.
+                  Entre le code partagé par l&apos;hôte et rejoins la room.
                 </p>
               </Link>
 

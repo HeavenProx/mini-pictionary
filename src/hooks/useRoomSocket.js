@@ -28,7 +28,7 @@ export function useRoomSocket(roomId, user) {
       socket.off("room:participants", onParticipants)
       // ne pas disconnect le singleton ici
     }
-  }, [roomId, user?.id, user?.name])
+  }, [roomId, user])
 
   return { participants }
 }

@@ -350,7 +350,7 @@ export default function RoomPage() {
       socket.off('game:ended', onEnded)
       socket.off('game:reset', onReset)
     }
-  }, [roomId])
+  }, [roomId, ensureCanvasSize, drawerUserId, drawerSocketId, me.id])
 
   // clear secret word when role changes or game stops
   useEffect(() => {
