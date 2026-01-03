@@ -22,6 +22,13 @@ export default function RoomPage() {
   // ---- présence temps réel (participants) ----
   const [exists, setExists] = useState(null)
   const { participants } = useRoomSocket(roomId, me)
+  // Stocke la dernière liste non vide des participants pour l'historique
+  const lastParticipantsRef = useRef([])
+  useEffect(() => {
+    if (participants && participants.length > 0) {
+      lastParticipantsRef.current = participants
+    }
+  }, [participants])
 
   // ---- canvas refs & state ----
   const canvasRef = useRef(null)
@@ -257,12 +264,36 @@ export default function RoomPage() {
     socket.on('game:timer', onTimer)
 
     // Fin de manche (winners)
-    const onEnded = ({ winners }) => {
+    const onEnded = async ({ winners }) => {
       console.log('[client] game:ended', { winners })
       setWinners(winners || [])
       setShowEnd(true)
       setRoundEnding(false)
       setRemainingSeconds(0)
+
+      // Enregistrement de l'historique de la partie
+      try {
+        // Prépare la liste des joueurs avec points (1 pour gagnant, 0 sinon)
+        const winnerIds = (winners || []).map(w => w.userId).filter(Boolean)
+        // Utilise la liste des participants présents à la fin de la manche
+        const currentParticipants = participants && participants.length > 0 ? participants : lastParticipantsRef.current;
+        const players = currentParticipants.map(p => ({
+          id: p.id,
+          name: p.name,
+          points: winnerIds.includes(p.id) ? 1 : 0
+        }))
+        await fetch('/api/history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            roomId: roomId,
+            winnerId: winnerIds[0] || null,
+            players
+          })
+        })
+      } catch (e) {
+        console.error('[client] failed to save game history', e)
+      }
     }
     socket.on('game:ended', onEnded)
 

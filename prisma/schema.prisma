@@ -20,6 +20,7 @@ model User {
 
   sessions      Session[]
   accounts      Account[]
+  gameWins      GameHistory[] @relation("UserWins")
 }
 
 model Session {
@@ -55,6 +56,17 @@ model VerificationToken {
   identifier String   @db.VarChar(128)
   token      String   @unique @db.VarChar(128)   
   expires    DateTime
+}
+
+
+
+model GameHistory {
+  id         String   @id @default(cuid())
+  roomId     String
+  playedAt   DateTime @default(now())
+  winnerId   String?  // User.id du gagnant
+  winner     User?    @relation("UserWins", fields: [winnerId], references: [id])
+  playersJson String  @db.Text // JSON.stringify([{id, name, points}])
 }
 
 model Room {
