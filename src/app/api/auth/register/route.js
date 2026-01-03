@@ -85,7 +85,7 @@ export async function POST(req) {
     try {
       await sendMail({ to: email, subject, text, html })
     } catch (err) {
-      console.error("[register] SendGrid first-send error:", err)
+      console.error("[register] send-mail first-send error:", err)
       // En dev, ne bloque pas la création du compte si l'envoi d'email échoue — renvoie ok et le lien de vérif en dev
       if (process.env.NODE_ENV !== "production") {
         console.warn('[register] Send failed but continuing in dev — returning dev verify URL')
