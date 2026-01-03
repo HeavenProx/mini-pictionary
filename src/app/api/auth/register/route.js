@@ -65,7 +65,21 @@ export async function POST(req) {
 
     console.log("[register] created user=", result.user.id, "token id=", result.vt.id)
 
-    const verifyUrl = new URL(`/api/auth/verify-email?token=${token}`, process.env.NEXTAUTH_URL).toString()
+    // Build verify URL — prefer NEXTAUTH_URL but fallback to request origin when missing
+    let baseUrl = process.env.NEXTAUTH_URL
+    if (!baseUrl) {
+      try {
+        baseUrl = new URL(req.url).origin
+        console.warn('[register] NEXTAUTH_URL not set, using request origin as fallback:', baseUrl)
+      } catch (e) {
+        // final fallback — best effort
+        const host = req.headers.get('host') || ''
+        baseUrl = host ? `https://${host}` : ''
+        console.warn('[register] built fallback baseUrl from host header:', baseUrl)
+      }
+    }
+
+    const verifyUrl = new URL(`/api/auth/verify-email?token=${token}`, baseUrl || undefined).toString()
     const { subject, text, html } = renderVerifyEmail({ pseudo, verifyUrl })
 
     try {
