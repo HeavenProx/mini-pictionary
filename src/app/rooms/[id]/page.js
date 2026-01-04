@@ -172,7 +172,7 @@ export default function RoomPage() {
       const payloadAuthoritative = Boolean(payloadDrawerUserId || payloadDrawerSocketId)
 
       // If payload is authoritative, apply immediately and clear any pending non-authoritative change
-      if (payloadAuthoritative) {
+      if (payloadAuthoritative) { 
         if (pendingRoleRef.current) {
           clearTimeout(pendingRoleRef.current)
           pendingRoleRef.current = null
@@ -183,6 +183,10 @@ export default function RoomPage() {
           if (word) setSecretWord(word)
           // assure que le canvas est bien dimensionné
           requestAnimationFrame(() => ensureCanvasSize())
+          // si on est drawer mais qu'on n'a pas reçu le mot, demande-le explicitement
+          if (!word) {
+            try { getSocket().emit('game:request-word', { roomId }) } catch(e) { console.warn('[client] request-word emit failed', e) }
+          }
         } else {
           setRole("guesser")
         }
@@ -220,6 +224,10 @@ export default function RoomPage() {
       // si le drawerUserId correspond à moi, assure mon rôle
       if (newDrawerUserId && newDrawerUserId === me.id) {
         setRole("drawer")
+        // demande le mot si on est drawer mais pas encore reçu
+        if (!secretWord) {
+          try { getSocket().emit('game:request-word', { roomId }) } catch(e) { console.warn('[client] request-word emit failed', e) }
+        }
       } else if (newDrawerSocketId && socket.id && newDrawerSocketId === socket.id) {
         // fallback : si le drawer était anonyme et son socket correspond au mien
         setRole("drawer")

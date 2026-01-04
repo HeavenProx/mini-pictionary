@@ -20,6 +20,8 @@ export default function handler(req, res) {
   // petit registre éphémère des rooms → participants
   const rooms = new Map() // Map<roomId, Map<socketId, {id,name}>>
   const roomStates = new Map() // Map<roomId, { started: boolean }>
+  // timers pour suppression différée lors d'un disconnect (tolérance au reload)
+  const disconnectTimers = new Map() // Map<socketId, Timeout>
 
   // helper: démarre le compte à rebours de fin de manche pour une room
   function startRoundEndCountdown(roomId) {
@@ -167,6 +169,28 @@ export default function handler(req, res) {
       socket.data.roomId = roomId // on mémorise la room du socket
 
       if (!rooms.has(roomId)) rooms.set(roomId, new Map())
+
+      // Si un participant avec le même user.id existait (reload/reconnect),
+      // nettoie l'ancienne entrée pour éviter leave/join oscillants.
+      try {
+        if (user?.id) {
+          for (const [sid, info] of Array.from(rooms.get(roomId).entries())) {
+            if (info && info.id && String(info.id) === String(user.id) && sid !== socket.id) {
+              // annule timer de suppression si présent
+              const t = disconnectTimers.get(sid)
+              if (t) {
+                clearTimeout(t)
+                disconnectTimers.delete(sid)
+              }
+              rooms.get(roomId).delete(sid)
+              console.log('[io] removed stale participant on reconnect', { roomId, oldSid: sid, userId: user.id })
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[io] error cleaning stale participants', { roomId, e })
+      }
+
       rooms.get(roomId).set(socket.id, {
         id: user?.id || socket.id,
         name: user?.name || "Anonyme",
@@ -471,20 +495,47 @@ export default function handler(req, res) {
 
     socket.on("disconnect", () => {
       const r = socket.data.roomId
-      if (r && rooms.has(r)) {
-        rooms.get(r).delete(socket.id)
-        const list = Array.from(rooms.get(r).values())
-        io.to(r).emit("room:participants", list)
+      // on attend un peu avant de retirer le participant pour tolérer les reloads
+      const timer = setTimeout(() => {
+        try {
+          if (r && rooms.has(r)) {
+            rooms.get(r).delete(socket.id)
+            const list = Array.from(rooms.get(r).values())
+            io.to(r).emit("room:participants", list)
 
-        // if room is empty, cleanup timers/state
-        if (rooms.get(r).size === 0) {
-          const state = roomStates.get(r)
-          if (state?.roundTimer?.interval) clearInterval(state.roundTimer.interval)
-          rooms.delete(r)
-          roomStates.delete(r)
+            // if room is empty, cleanup timers/state
+            if (rooms.get(r).size === 0) {
+              const state = roomStates.get(r)
+              if (state?.roundTimer?.interval) clearInterval(state.roundTimer.interval)
+              rooms.delete(r)
+              roomStates.delete(r)
+            }
+          }
+        } catch (e) {
+          console.error('[io] delayed disconnect handler error', { sid: socket.id, e })
+        } finally {
+          disconnectTimers.delete(socket.id)
         }
+      }, 3500)
+
+      disconnectTimers.set(socket.id, timer)
+      console.log("[io] disconnect (delayed)", socket.id)
+    })
+
+    // Allow a client (drawer) to request the current secret word if they didn't receive it
+    socket.on('game:request-word', ({ roomId }) => {
+      try {
+        const state = roomStates.get(roomId)
+        if (state && state.currentWordText) {
+          socket.emit('game:word', { word: state.currentWordText, wordId: state.currentWordId })
+          console.log('[io] replied to game:request-word', { roomId, to: socket.id, wordId: state.currentWordId })
+        } else {
+          // no word available yet
+          socket.emit('game:word', { word: null, wordId: null })
+        }
+      } catch (e) {
+        console.error('[io] game:request-word error', { roomId, e })
       }
-      console.log("[io] disconnect", socket.id)
     })
 
     // permet à un joueur de retourner individuellement en page d'attente
