@@ -82,17 +82,18 @@ export async function POST(req) {
     const verifyUrl = new URL(`/api/auth/verify-email?token=${token}`, baseUrl || undefined).toString()
     const { subject, text, html } = renderVerifyEmail({ pseudo, verifyUrl })
 
+    // Print verify URL to logs so we can manually activate accounts if needed
+    console.log('[register] verifyUrl:', verifyUrl)
+
     try {
       const sendResult = await sendMail({ to: email, subject, text, html })
       console.log('[register] send result:', sendResult)
     } catch (err) {
       console.error("[register] send-mail first-send error:", err)
-      // En dev, ne bloque pas la création du compte si l'envoi d'email échoue — renvoie ok et le lien de vérif en dev
-      if (process.env.NODE_ENV !== "production") {
-        console.warn('[register] Send failed but continuing in dev — returning dev verify URL')
-        return NextResponse.json({ ok: true, devVerifyUrl: verifyUrl })
-      }
-      return NextResponse.json({ ok: false, error: "SEND_FAILED" }, { status: 502 })
+      console.error('[register] verifyUrl (for manual activation):', verifyUrl)
+      // In all environments, return the verification link so the user can manually verify
+      // Provide an explicit 'fallback' flag so the client can display it clearly
+      return NextResponse.json({ ok: true, fallbackVerifyUrl: verifyUrl, fallback: true, warning: 'SEND_FAILED' })
     }
 
     const dev = process.env.NODE_ENV !== "production" ? { devVerifyUrl: verifyUrl } : {}

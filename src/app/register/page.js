@@ -8,6 +8,7 @@ export default function Register() {
   const [loading, setLoading] = useState(false)
   const [error, setError]   = useState("")
   const [ok, setOk]         = useState(false)
+  const [verifyLink, setVerifyLink] = useState("")
 
   async function onSubmit(e) {
     e.preventDefault()
@@ -26,15 +27,17 @@ export default function Register() {
                 else if (data?.error === "MISSING_FIELDS") setError("Tous les champs sont requis.")
                 else if (data?.error === "INVALID_PSEUDO") setError("Pseudo trop court.")
                 else if (data?.error === "WEAK_PASSWORD") setError("Mot de passe trop court (min. 8).")
-                else if (data?.error === "SEND_FAILED") setError("L'email n'a pas pu être envoyé. Réessaie.")
                 else setError("Une erreur est survenue. Réessaie.")
         } else {
         setOk(true)
         if (data?.resent) {
             // tu peux ajuster le message “on a renvoyé l’email”
         }
-        if (data?.devVerifyUrl) {
-            console.log("[DEV] Lien de vérif:", data.devVerifyUrl)
+        // Show verification link when provided (fallback)
+        if (data?.devVerifyUrl || data?.fallbackVerifyUrl) {
+            const link = data?.devVerifyUrl || data?.fallbackVerifyUrl
+            console.log("[DEV] Lien de vérif:", link)
+            setVerifyLink(link)
         }
         }
 
@@ -55,6 +58,11 @@ export default function Register() {
           {ok && (
             <div className="alert alert-success mt-3">
               <span>Compte créé ! Vérifie tes emails pour l’activer ✅</span>
+            </div>
+          )}
+          {verifyLink && (
+            <div className="alert alert-info mt-3 break-words">
+              <span>Si tu n'as pas reçu l'email, active ton compte manuellement avec ce lien : <a className="link" href={verifyLink} target="_blank" rel="noreferrer">{verifyLink}</a></span>
             </div>
           )}
           {error && (
