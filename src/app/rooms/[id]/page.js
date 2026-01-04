@@ -88,6 +88,22 @@ export default function RoomPage() {
   const [winners, setWinners] = useState([])
   const [showEnd, setShowEnd] = useState(false)
 
+  // ------- Canvas sizing helper (DPR-aware) -------
+  const ensureCanvasSize = useCallback(() => {
+    const canvas = canvasRef.current
+    const wrap = containerRef.current
+    if (!canvas || !wrap) return
+    const dpr = Math.max(1, window.devicePixelRatio || 1)
+    const cssW = wrap.clientWidth
+    const cssH = wrap.clientHeight
+    canvas.width = Math.floor(cssW * dpr)
+    canvas.height = Math.floor(cssH * dpr)
+    canvas.style.width = cssW + "px"
+    canvas.style.height = cssH + "px"
+    const ctx = canvas.getContext("2d")
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  }, [])
+
   // Détection : si moins d'un joueur ou si le dessinateur a disparu
   const onlyOnePlayer = started && participants.length <= 1;
   const drawerAssigned = !!drawerUserId || !!drawerSocketId;
@@ -357,30 +373,7 @@ export default function RoomPage() {
     if (role !== 'drawer') setSecretWord(null)
   }, [role, started])
 
-  // ------- Canvas sizing helper (DPR-aware) -------
-  const ensureCanvasSize = useCallback(() => {
-    const canvas = canvasRef.current
-    const wrap = containerRef.current
-    if (!canvas || !wrap) return
-    const dpr = Math.max(1, window.devicePixelRatio || 1)
-    const cssW = wrap.clientWidth
-    const cssH = wrap.clientHeight
-    canvas.width = Math.floor(cssW * dpr)
-    canvas.height = Math.floor(cssH * dpr)
-    canvas.style.width = cssW + "px"
-    canvas.style.height = cssH + "px"
-    const ctx = canvas.getContext("2d")
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-  }, [])
-
-  useEffect(() => {
-    ensureCanvasSize()
-    // run a second resize on next frame / short timeout to handle layout changes
-    requestAnimationFrame(() => ensureCanvasSize())
-    setTimeout(() => ensureCanvasSize(), 100)
-    window.addEventListener("resize", ensureCanvasSize)
-    return () => window.removeEventListener("resize", ensureCanvasSize)
-  }, [ensureCanvasSize])
+  // (canvas sizing handled earlier)
 
   // helpers
   const getPos = (e) => {
