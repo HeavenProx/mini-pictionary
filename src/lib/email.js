@@ -12,6 +12,45 @@ export async function sendMail({ to, subject, text, html }) {
     return { id: "dev-log" }
   }
 
+  // Resend provider (API)
+  if (PROVIDER === "resend") {
+    const key = process.env.RESEND_API_KEY
+    if (!key) {
+      const msg = '[RESEND] missing RESEND_API_KEY'
+      console.error(msg)
+      if (process.env.NODE_ENV === 'production') throw new Error(msg)
+      console.warn(msg + ' — falling back to dev log')
+      console.log("[DEV EMAIL] to:", to, "subj:", subject)
+      return { id: 'dev-log' }
+    }
+
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({ from, to, subject, text, html }),
+      })
+
+      const body = await res.text()
+      let json
+      try { json = JSON.parse(body) } catch(e) { json = null }
+
+      if (!res.ok) {
+        console.error('[RESEND] send failed', res.status, body)
+        throw new Error('[RESEND] send failed: ' + (json?.message || body || res.status))
+      }
+
+      console.log('[RESEND] sent id:', json?.id || '(no-id)')
+      return { id: json?.id || 'resend' }
+    } catch (err) {
+      console.error('[RESEND] error:', err)
+      throw err
+    }
+  }
+
   // SMTP provider (uses nodemailer)
   if (PROVIDER === "smtp") {
     // Debug log all SMTP env vars (hide password)
