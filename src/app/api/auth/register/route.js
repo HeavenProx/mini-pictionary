@@ -85,15 +85,33 @@ export async function POST(req) {
     // Print verify URL to logs so we can manually activate accounts if needed
     console.log('[register] verifyUrl:', verifyUrl)
 
-    try {
-      const sendResult = await sendMail({ to: email, subject, text, html })
-      console.log('[register] send result:', sendResult)
-    } catch (err) {
-      console.error("[register] send-mail first-send error:", err)
+    // Try to send email but don't block users longer than 20s. If sending takes too long
+    // return a fallback verify link immediately while allowing the send to continue in background.
+    const sendPromise = sendMail({ to: email, subject, text, html })
+
+    const timeoutMs = 20_000
+    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve({ status: 'timeout' }), timeoutMs))
+
+    const winner = await Promise.race([
+      sendPromise.then((res) => ({ status: 'ok', res })).catch((err) => ({ status: 'error', err })),
+      timeoutPromise,
+    ])
+
+    if (winner.status === 'ok') {
+      console.log('[register] send result:', winner.res)
+    } else if (winner.status === 'error') {
+      console.error('[register] send-mail error (fast):', winner.err)
       console.error('[register] verifyUrl (for manual activation):', verifyUrl)
-      // In all environments, return the verification link so the user can manually verify
-      // Provide an explicit 'fallback' flag so the client can display it clearly
+      // Return the verify link immediately so user can activate account manually
       return NextResponse.json({ ok: true, fallbackVerifyUrl: verifyUrl, fallback: true, warning: 'SEND_FAILED' })
+    } else if (winner.status === 'timeout') {
+      // did not finish within timeout; let sendPromise continue and log result when done
+      sendPromise
+        .then((res) => console.log('[register] send result (delayed):', res))
+        .catch((err) => console.error('[register] send error (delayed):', err))
+
+      console.warn('[register] send-mail timed out after', timeoutMs, 'ms; returning fallback link')
+      return NextResponse.json({ ok: true, fallbackVerifyUrl: verifyUrl, fallback: true, warning: 'SEND_TIMEOUT' })
     }
 
     const dev = process.env.NODE_ENV !== "production" ? { devVerifyUrl: verifyUrl } : {}

@@ -38,6 +38,11 @@ export default function Register() {
             const link = data?.devVerifyUrl || data?.fallbackVerifyUrl
             console.log("[DEV] Lien de vérif:", link)
             setVerifyLink(link)
+            if (data?.fallback && data?.warning === 'SEND_TIMEOUT') {
+              setError('L’envoi de l’email prend trop de temps ; le lien est affiché ci‑dessous.')
+            } else if (data?.fallback && data?.warning === 'SEND_FAILED') {
+              setError("L'email n'a pas pu être envoyé. Voici le lien pour activer le compte manuellement.")
+            }
         }
         // if fallback, we already show the link; ensure UI text has escaped apostrophes
         }
