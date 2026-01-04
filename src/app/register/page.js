@@ -39,6 +39,7 @@ export default function Register() {
             console.log("[DEV] Lien de vérif:", link)
             setVerifyLink(link)
         }
+        // if fallback, we already show the link; ensure UI text has escaped apostrophes
         }
 
     } catch {
@@ -57,12 +58,12 @@ export default function Register() {
 
           {ok && (
             <div className="alert alert-success mt-3">
-              <span>Compte créé ! Vérifie tes emails pour l’activer ✅</span>
+              <span>Compte créé ! Vérifie tes emails pour l&apos;activer ✅</span>
             </div>
           )}
           {verifyLink && (
             <div className="alert alert-info mt-3 break-words">
-              <span>Si tu n'as pas reçu l'email, active ton compte manuellement avec ce lien : <a className="link" href={verifyLink} target="_blank" rel="noreferrer">{verifyLink}</a></span>
+              <span>Si tu n&apos;as pas reçu l&apos;email, active ton compte manuellement avec ce lien : <a className="link" href={verifyLink} target="_blank" rel="noreferrer">{verifyLink}</a></span>
             </div>
           )}
           {error && (
@@ -103,7 +104,7 @@ export default function Register() {
               />
             </div>
             <button className="btn btn-primary w-full rounded-xl" disabled={loading}>
-              {loading ? "Création..." : "S'inscrire"}
+              {loading ? "Création..." : "S&apos;inscrire"}
             </button>
           </form>
 
