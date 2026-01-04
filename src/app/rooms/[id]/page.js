@@ -127,7 +127,33 @@ export default function RoomPage() {
       (drawerUserId && p.id === drawerUserId) ||
       (drawerSocketId && p.id === drawerSocketId)
     );
-  const showAbort = (onlyOnePlayer || drawerMissing);
+
+  // showAbort sera activé avec un délai pour tolérer les reloads rapides (F5)
+  const [showAbort, setShowAbort] = useState(false)
+  const abortTimerRef = useRef(null)
+  useEffect(() => {
+    const shouldAbort = (onlyOnePlayer || drawerMissing)
+    if (shouldAbort) {
+      if (abortTimerRef.current) clearTimeout(abortTimerRef.current)
+      // délai tolérant: 1200ms
+      abortTimerRef.current = setTimeout(() => {
+        setShowAbort(true)
+        abortTimerRef.current = null
+      }, 1200)
+    } else {
+      if (abortTimerRef.current) {
+        clearTimeout(abortTimerRef.current)
+        abortTimerRef.current = null
+      }
+      setShowAbort(false)
+    }
+    return () => {
+      if (abortTimerRef.current) {
+        clearTimeout(abortTimerRef.current)
+        abortTimerRef.current = null
+      }
+    }
+  }, [onlyOnePlayer, drawerMissing])
 
   useEffect(() => {
     if (!roomId) return

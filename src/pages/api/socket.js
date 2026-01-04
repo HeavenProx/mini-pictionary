@@ -82,6 +82,23 @@ export default function handler(req, res) {
         const skip = Math.floor(Math.random() * count)
         const p = await prisma.prompt.findMany({ take: 1, skip })
         selectedPrompt = p[0] || null
+      } else {
+        // fallback: create a default prompt if DB is empty so currentWordId is not null
+        const defaults = [
+          { text: 'Chat' },
+          { text: 'Maison' },
+          { text: 'Voiture' },
+          { text: 'Arbre' },
+          { text: 'Chien' },
+        ]
+        const choice = defaults[Math.floor(Math.random() * defaults.length)]
+        try {
+          const created = await prisma.prompt.create({ data: { text: choice.text } })
+          selectedPrompt = created
+        } catch (e) {
+          console.error('[io] failed to create fallback prompt', { e })
+          selectedPrompt = { id: null, text: choice.text }
+        }
       }
 
       // Persister l'état en DB
@@ -369,6 +386,16 @@ export default function handler(req, res) {
             const skip = Math.floor(Math.random() * count)
             const p = await prisma.prompt.findMany({ take: 1, skip })
             selectedPrompt = p[0] || null
+          } else {
+            // fallback create prompt when none exist
+            const defaults = ['Chat','Maison','Voiture','Arbre','Chien']
+            const choice = defaults[Math.floor(Math.random() * defaults.length)]
+            try {
+              const created = await prisma.prompt.create({ data: { text: choice } })
+              selectedPrompt = created
+            } catch (e) {
+              console.error('[io] failed to create fallback prompt', { e })
+            }
           }
 
           const updated = await prisma.room.update({ where: { id: r }, data: { started: true, drawerId: drawerUserId, drawerSocketId, currentWordId: selectedPrompt ? selectedPrompt.id : null } })
