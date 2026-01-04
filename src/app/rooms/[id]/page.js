@@ -1,7 +1,7 @@
 // src/app/rooms/[id]/page.js
 "use client"
 
-import { useEffect, useRef, useState, useCallback } from "react"
+import { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
 import Link from "next/link"
@@ -17,7 +17,7 @@ export default function RoomPage() {
   const { id: roomId } = useParams()
   const router = useRouter()
   const { data: session } = useSession()
-  const me = { id: session?.user?.id, name: session?.user?.name || "Anonyme" }
+  const me = useMemo(() => ({ id: session?.user?.id, name: session?.user?.name || "Anonyme" }), [session?.user?.id, session?.user?.name])
 
   // ---- présence temps réel (participants) ----
   const [exists, setExists] = useState(null)
