@@ -83,7 +83,7 @@ export default function handler(req, res) {
         const p = await prisma.prompt.findMany({ take: 1, skip })
         selectedPrompt = p[0] || null
       } else {
-        // fallback: create a default prompt if DB is empty so currentWordId is not null
+        // fallback: DB empty → create a persisted prompt so currentWordId is set
         const defaults = [
           { text: 'Chat' },
           { text: 'Maison' },
@@ -387,7 +387,7 @@ export default function handler(req, res) {
             const p = await prisma.prompt.findMany({ take: 1, skip })
             selectedPrompt = p[0] || null
           } else {
-            // fallback create prompt when none exist
+            // fallback: DB empty → create a persisted prompt so currentWordId is set
             const defaults = ['Chat','Maison','Voiture','Arbre','Chien']
             const choice = defaults[Math.floor(Math.random() * defaults.length)]
             try {
@@ -395,6 +395,7 @@ export default function handler(req, res) {
               selectedPrompt = created
             } catch (e) {
               console.error('[io] failed to create fallback prompt', { e })
+              selectedPrompt = { id: null, text: choice }
             }
           }
 
